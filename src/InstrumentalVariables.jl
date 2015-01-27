@@ -1,10 +1,14 @@
 module InstrumentalVariables
 
-importall GLM
+using Reexport
+
+@reexport using GLM
+@reexport using StatsBase
+
 import GLM.BlasReal
 import GLM.Cholesky
 import GLM.FP
-import StatsBase
+
 
 typealias FPVector{T<:FloatingPoint} DenseArray{T,1}
 
@@ -60,7 +64,7 @@ end
 DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T}) = DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)))
 
 
-function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
+function GLM.delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, r))
     p
 end
@@ -68,9 +72,15 @@ end
 iv(X, Z, y) = fit(InstrumentalVariables.LinearIVModel, X, Z, y)
 
 ## cholfact{T<:DensePred}(x::LinearIVModel{T}) = cholfact(x.pp)
-
 ## Base.LinAlg.cholfact{T<:FP}(p::DenseIVPredChol{T}) = p.chol.UL
 
+if VERSION >= v"0.4.0-dev+122"
+    cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky{T,Matrix{T},:U}(p.qr[:R])
+    cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; typeof(c)(copy(c.UL)))
+else
+    cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky(p.qr[:R], 'U')
+    cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
+end
 
 function StatsBase.stderr(vv::LinearIVModel)
     c = vv.pp.chol.UL
