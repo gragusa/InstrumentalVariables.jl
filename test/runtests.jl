@@ -1,9 +1,8 @@
-using PDMats
 using InstrumentalVariables
-using Base.Test
+using PDMats
 
 # write your own tests here
-@test 1 == 1
+#@test 1 == 1
 
 srand(7875)
 
@@ -16,7 +15,14 @@ function ivreg(y, x, z)
     reshape(xPz*x\xPz*y, size(x)[2])
 end
 
-ivreg(y, x, z)
+bas = ivreg(y, x, z);
 
 out = iv(x,z,y);
+
+vcov(out)
+
+using CovarianceMatrices
+
+vcov(out, HC0())
+
 
