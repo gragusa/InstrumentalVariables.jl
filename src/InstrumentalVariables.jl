@@ -9,8 +9,8 @@ using NumericExtensions
 
 
 import GLM: BlasReal, Cholesky, FP, WtResid, DispersionFun 
-import StatsBase: residuals
-
+import StatsBase: residuals, coeftable
+import Distributions: ccdf, FDist, Chisq, Normal
 
 typealias FPVector{T<:FloatingPoint} DenseArray{T,1}
 
@@ -35,9 +35,7 @@ type LinearIVModel{T<:LinPred} <: LinPredModel
     pp::T
 end
 
-
 deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts,r.y,r.mu)
-
 residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu : map(WtResid(),r.wts,r.y,r.mu)
 residuals(r::IVResp) = r.wrkresid
 residuals(l::LinearIVModel) = residuals(l.rr)
@@ -113,12 +111,12 @@ function coeftable(mm::LinearIVModel)
     cc = coef(mm)
     se = stderr(mm)
     tt = cc ./ se
-    CoefTable(hcat(cc,se,tt,ccdf(FDist(1, df_residual(mm)), abs2(tt))),
+    CoefTable(hcat(cc,se,tt,ccdf(Normal(0, 1), abs2(tt))),
               ["Estimate","Std.Error","t value", "Pr(>|t|)"],
               ["x$i" for i = 1:size(mm.pp.X, 2)], 4)
 end
 
 
-export iv, residuals
+export iv, residuals, coeftable
 
 end # module
