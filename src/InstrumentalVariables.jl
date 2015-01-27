@@ -1,33 +1,34 @@
 module InstrumentalVariables
 
 using Reexport
+using NumericExtensions
+
 
 @reexport using GLM
 @reexport using StatsBase
 
-import GLM.BlasReal
-import GLM.Cholesky
-import GLM.FP
+
+import GLM: BlasReal, Cholesky, FP, WtResid, DispersionFun 
+import StatsBase: residuals
 
 
 typealias FPVector{T<:FloatingPoint} DenseArray{T,1}
 
-
 type IVResp{V<:FPVector} <: GLM.ModResp  # response in a linear model
-    mu::V                            # mean response
-    offset::V                        # offset added to linear predictor (may have length 0)
-    wts::V                           # prior weights (may have length 0)
-    y::V                             # response
-    function IVResp(mu::V, off::V, wts::V, y::V)
+    mu::V                                # mean response
+    offset::V                            # offset added to linear predictor (may have length 0)
+    wts::V                               # prior weights (may have length 0)
+    wrkresid::V                          # residual
+    y::V                                 # response
+    function IVResp(mu::V, off::V, wts::V, wrkresid::V, y::V)
         n = length(y); length(mu) == n || error("mismatched lengths of mu and y")
         ll = length(off); ll == 0 || ll == n || error("length of offset is $ll, must be $n or 0")
         ll = length(wts); ll == 0 || ll == n || error("length of wts is $ll, must be $n or 0")
-        new(mu,off,wts,y)
+        new(mu,off,wts,wrkresid,y)
     end
 end
 
-
-IVResp{V<:FPVector}(y::V) = IVResp{V}(fill!(similar(y), zero(eltype(V))), similar(y, 0), similar(y, 0), y)
+IVResp{V<:FPVector}(y::V) = IVResp{V}(fill!(similar(y), zero(eltype(V))), similar(y, 0), similar(y, 0), similar(y, 0), y)
 
 type LinearIVModel{T<:LinPred} <: LinPredModel
     rr::IVResp
@@ -35,10 +36,26 @@ type LinearIVModel{T<:LinPred} <: LinPredModel
 end
 
 
+deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts,r.y,r.mu)
+
+residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu : map(WtResid(),r.wts,r.y,r.mu)
+residuals(r::IVResp) = r.wrkresid
+residuals(l::LinearIVModel) = residuals(l.rr)
+
+
+
+function updatemu!{V<:FPVector}(r::IVResp{V}, linPr::V)
+    n = length(linPr); length(r.y) == n || error("length(linPr) is $n, should be $(length(r.y))")
+    length(r.offset) == 0 ? copy!(r.mu, linPr) : map!(Add(), r.mu, linPr, r.offset)
+end
+updatemu!{V<:FPVector}(r::IVResp{V}, linPr) = updatemu!(r, convert(V,vec(linPr)))
+
 function StatsBase.fit{LinPredT<:LinPred}(::Type{LinearIVModel{LinPredT}}, X::Matrix, Z::Matrix, y::Vector)
     rr = IVResp(float(y))
     pp = LinPredT(X, Z)
     delbeta!(pp, rr.y)
+    updatemu!(rr, linpred(pp, 0.))
+    residuals!(rr)
     LinearIVModel(rr, pp)
 end
 
@@ -75,18 +92,22 @@ iv(X, Z, y) = fit(InstrumentalVariables.LinearIVModel, X, Z, y)
 ## Base.LinAlg.cholfact{T<:FP}(p::DenseIVPredChol{T}) = p.chol.UL
 
 if VERSION >= v"0.4.0-dev+122"
-    cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky{T,Matrix{T},:U}(p.qr[:R])
-    cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; typeof(c)(copy(c.UL)))
+    #cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky{T,Matrix{T},:U}(p.qr[:R])
+    Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; typeof(c)(copy(c.UL)))
 else
-    cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky(p.qr[:R], 'U')
-    cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
+    #cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky(p.qr[:R], 'U')
+    Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
 end
 
-function StatsBase.stderr(vv::LinearIVModel)
-    c = vv.pp.chol.UL
-    
-    end
 
+function GLM.scale(m::LinearIVModel, sqr::Bool=false)
+    if length(m.rr.wts) == 0
+        s = sumsq(residuals(m))/df_residual(m)
+    else
+        s = sum(DispersionFun(), m.rr.wts, residuals(m))/df_residual(m)
+    end 
+    sqr ? s : sqrt(s)
+end
 
 function coeftable(mm::LinearIVModel)
     cc = coef(mm)
@@ -98,6 +119,6 @@ function coeftable(mm::LinearIVModel)
 end
 
 
-export iv
+export iv, residuals
 
 end # module
