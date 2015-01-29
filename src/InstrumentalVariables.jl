@@ -8,7 +8,7 @@ using NumericExtensions
 @reexport using StatsBase
 
 
-import GLM: BlasReal, Cholesky, FP, WtResid, DispersionFun 
+import GLM: BlasReal, Cholesky, FP, WtResid, DispersionFun, ModelMatrix
 import StatsBase: residuals, coeftable
 import Distributions: ccdf, FDist, Chisq, Normal
 
@@ -97,7 +97,6 @@ else
     Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
 end
 
-
 function GLM.scale(m::LinearIVModel, sqr::Bool=false)
     if length(m.rr.wts) == 0
         s = sumsq(residuals(m))/df_residual(m)
@@ -115,6 +114,9 @@ function coeftable(mm::LinearIVModel)
               ["Estimate","Std.Error","t value", "Pr(>|t|)"],
               ["x$i" for i = 1:size(mm.pp.X, 2)], 4)
 end
+
+
+ModelMatrix(x::LinearIVModel) = x.pp.Xp
 
 
 export iv, residuals, coeftable
