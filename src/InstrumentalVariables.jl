@@ -3,12 +3,10 @@ module InstrumentalVariables
 using Reexport
 using NumericExtensions
 
-
 @reexport using GLM
 @reexport using StatsBase
 
-
-import GLM: BlasReal, Cholesky, FP, WtResid, DispersionFun, ModelMatrix
+import GLM: BlasReal, Cholesky, FP, WtResid, Add, Subtract, Multiply, DispersionFun, ModelMatrix, result_type, delbeta!
 import StatsBase: residuals, coeftable
 import Distributions: ccdf, FDist, Chisq, Normal
 
@@ -30,13 +28,16 @@ end
 
 IVResp{V<:FPVector}(y::V) = IVResp{V}(fill!(similar(y), zero(eltype(V))), similar(y, 0), similar(y, 0), similar(y, 0), y)
 
+IVResp{V<:FPVector}(y::V, off::V, wts::V) = IVResp{V}(fill!(similar(y), zero(eltype(V))), off, wts, similar(y, 0), y)
+
 type LinearIVModel{T<:LinPred} <: LinPredModel
     rr::IVResp
     pp::T
 end
 
-deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts,r.y,r.mu)
-residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu : map(WtResid(),r.wts,r.y,r.mu)
+
+deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts, r.y, r.mu)
+residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu :  (r.y-r.mu).*sqrt(r.wts)
 residuals(r::IVResp) = r.wrkresid
 residuals(l::LinearIVModel) = residuals(l.rr)
 
@@ -48,16 +49,41 @@ function updatemu!{V<:FPVector}(r::IVResp{V}, linPr::V)
 end
 updatemu!{V<:FPVector}(r::IVResp{V}, linPr) = updatemu!(r, convert(V,vec(linPr)))
 
-function StatsBase.fit{LinPredT<:LinPred}(::Type{LinearIVModel{LinPredT}}, X::Matrix, Z::Matrix, y::Vector)
-    rr = IVResp(float(y))
+function StatsBase.fit{T<:FloatingPoint, V<:FPVector, LinPredT<:LinPred}(::Type{LinearIVModel{LinPredT}},
+                                                                         X::Matrix{T}, Z::Matrix{T}, y::V;
+                                                                         dofit::Bool=true,
+                                                                         wts::V=similar(y, 0),
+                                                                         offset::V=similar(y, 0), fitargs...)
+    size(X, 1) == size(y, 1) || DimensionMismatch("number of rows in X and y must match")
+    size(X, 1) == size(Z, 1) || DimensionMismatch("number of rows in X and Z must match")
+    size(X, 2) < size(Z, 1)  || DimensionMismatch("number of instruments is not sufficient for identification")
+    n = length(y)
+    ## lw = length(wts)
+    ## length(wts) == n || error("length(wts) = $lw should be 0 or $n")
+    wts = T <: Float64 ? copy(wts) : convert(typeof(y), wts)
+    rr = IVResp(y, offset, wts)
     pp = LinPredT(X, Z)
-    delbeta!(pp, rr.y)
-    updatemu!(rr, linpred(pp, 0.))
+    scratch = similar(pp.X)
+    if length(wts) > 0
+        updatemu!(rr, linpred(delbeta!(pp, rr.y, rr.wts, scratch)))
+    else
+        updatemu!(rr, linpred(delbeta!(pp, rr.y)))
+    end     
     residuals!(rr)
     LinearIVModel(rr, pp)
 end
 
-StatsBase.fit(::Type{LinearIVModel}, X::Matrix, Z::Matrix, y::Vector) = StatsBase.fit(LinearIVModel{DenseIVPredChol}, X, Z, y)
+function wrkresp(r::IVResp)
+    if length(r.offset) > 0
+        return map1!(Add(), map(Subtract(), r.y, r.offset), r.wrkresid)
+    end
+    map(Add(), r.y, r.wrkresid)
+end
+
+function StatsBase.fit(::Type{LinearIVModel}, X::Matrix, Z::Matrix,
+                       y::Vector; kwargs...)
+    StatsBase.fit(LinearIVModel{DenseIVPredChol}, X, Z, y; kwargs...)
+end 
 
 type DenseIVPredChol{T<:BlasReal} <: DensePred
     X::Matrix{T}                   # model matrix
@@ -76,18 +102,23 @@ type DenseIVPredChol{T<:BlasReal} <: DensePred
         new(X, Z, beta0, beta0, Pz, Xt, Pz*Z, cholfact(Xt'Xt))
     end
 end
-DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T}) = DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)))
+function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T})
+    DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)))
+end 
 
-
-function GLM.delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
+function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, r))
     p
 end
 
-iv(X, Z, y) = fit(InstrumentalVariables.LinearIVModel, X, Z, y)
+function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T}, scr::Matrix{T})
+    vbroadcast!(Multiply(), scr, p.X, wt, 1)
+    cholfact!(At_mul_B!(p.chol.UL, scr, p.X), :U)
+    A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, scr, r))
+    p
+end
 
-## cholfact{T<:DensePred}(x::LinearIVModel{T}) = cholfact(x.pp)
-## Base.LinAlg.cholfact{T<:FP}(p::DenseIVPredChol{T}) = p.chol.UL
+ivreg(X, Z, y; kwargs...) = fit(InstrumentalVariables.LinearIVModel, X, Z, y; kwargs...)
 
 if VERSION >= v"0.4.0-dev+122"
     #cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky{T,Matrix{T},:U}(p.qr[:R])
@@ -117,7 +148,6 @@ end
 
 
 ModelMatrix(x::LinearIVModel) = x.pp.Xp
-
 
 export iv, residuals, coeftable
 
