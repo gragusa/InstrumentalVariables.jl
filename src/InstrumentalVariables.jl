@@ -176,6 +176,16 @@ function coeftable(mm::LinearIVModel)
               ["x$i" for i = 1:size(mm.pp.X, 2)], 4)
 end
 
+function coeftable(mm::LinearIVModel, vv::RobustVariance)
+    cc = coef(mm)
+    se = stderr(mm, vv)
+    tt = cc ./ se
+    CoefTable(hcat(cc,se,tt,ccdf(Normal(0, 1), abs2(tt))),
+              ["Estimate","Std.Error","t value", "Pr(>|t|)"],
+              ["x$i" for i = 1:size(mm.pp.X, 2)], 4)
+end
+
+
 
 ModelMatrix(x::LinearIVModel) = x.pp.Xp
 
