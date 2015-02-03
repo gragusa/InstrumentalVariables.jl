@@ -29,12 +29,12 @@ end
 function IVResp{V<:FPVector}(y::V)
     IVResp{V}(fill!(similar(y), zero(eltype(V))), similar(y, 0),
               similar(y, 0), similar(y, 0), y)
-end 
+end
 
 function IVResp{V<:FPVector}(y::V, off::V, wts::V)
     IVResp{V}(fill!(similar(y), zero(eltype(V))), off, wts,
               similar(y, 0), y)
-end 
+end
 
 type LinearIVModel{T<:LinPred} <: LinPredModel
     rr::IVResp
@@ -64,15 +64,14 @@ function StatsBase.fit{T<:FloatingPoint, V<:FPVector,
     size(X, 2) < size(Z, 1)  || DimensionMismatch("number of instruments is not sufficient for identification")
     n = length(y)
     wts = T <: Float64 ? copy(wts) : convert(typeof(y), wts)
-    rr = IVResp(y, offset, wts)    
+    rr = IVResp(y, offset, wts)
     if length(wts) > 0
         pp = LinPredT(X, Z, wts)
-        scratch = similar(pp.X)
-        updatemu!(rr, linpred(delbeta!(pp, rr.y, rr.wts, scratch), 0.))
+        updatemu!(rr, linpred(delbeta!(pp, rr.y, rr.wts), 0.))
     else
         pp = LinPredT(X, Z)
         updatemu!(rr, linpred(delbeta!(pp, rr.y), 0.))
-    end     
+    end
     residuals!(rr)
     LinearIVModel(rr, pp)
 end
@@ -80,7 +79,7 @@ end
 function StatsBase.fit(::Type{LinearIVModel}, X::Matrix, Z::Matrix,
                        y::Vector; kwargs...)
     StatsBase.fit(LinearIVModel{DenseIVPredChol}, X, Z, y; kwargs...)
-end 
+end
 
 function wrkresp(r::IVResp)
     if length(r.offset) > 0
@@ -96,25 +95,37 @@ type DenseIVPredChol{T<:BlasReal} <: DensePred
     delbeta::Vector{T}
     Xp::Matrix{T}
     chol::Cholesky{T}
-    function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T}, beta0::Vector{T}, wt::Vector{T})
+    function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T},
+                                          beta0::Vector{T}, wt::Vector{T})
         n,p = size(X); length(beta0) == p || error("dimension mismatch")
         if length(wt) > 0
             src = similar(Z)
             Zw = vbroadcast!(Multiply(), src, Z, sqrt(wt), 1)
-            cholfac_Z = cholfact(Zw'Zw)
             src = similar(X)
             Xw = vbroadcast!(Multiply(), src, X, sqrt(wt), 1)
-            XX = Xw'Zw*inv(cholfac_Z)*Zw'Xw  ## No need to store this probably
-            Xt = Zw*inv(cholfac_Z)*Zw'Xw
+            cholfac_Z = cholfact(Zw'Zw)
+            a  = Xw'Zw
+            b  = copy(Zw)
+            ## z  = Xw'Zw
+            ## Base.LinAlg.A_rdiv_B!(z, cholfac_Z[:UL])
+            ## XX = A_mul_Bt(z,z)
+            ## XX = Xw'Zw*inv(cholfac_Z)*Zw'Xw  ## No need to store this probably
+            ## Xt = Zw*inv(cholfac_Z)*Zw'Xw
+            ## Xt = A_mul_Bt(Zw, z)
         else
             cholfac_Z = cholfact(Z'Z)
-            XX = X'Z*inv(cholfac_Z)*Z'X  ## No need to store this probably
-            Xt = Z*inv(cholfac_Z)*Z'X
-        end         
+            a  = X'Z
+            b  = copy(Z)
+            ## XX = X'Z*inv(cholfac_Z)*Z'X  ## No need to store this probably
+            ## Xt = Z*inv(cholfac_Z)*Z'X
+        end
+        Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
+        XX = A_mul_Bt(a,a)
+        Base.LinAlg.A_rdiv_B!(b, cholfac_Z[:UL])
+        Xt = A_mul_Bt(b, a)
         new(X, Z, beta0, beta0, Xt, cholfact(XX))
     end
 end
-
 
 function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T})
     DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)), similar(X, 0))
@@ -131,10 +142,8 @@ function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
     p
 end
 
-function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T}, scr::Matrix{T})
+function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T})
     rp = broadcast(*, r, sqrt(wt))
-    #vbroadcast!(Multiply(), scr, p.Xp, swt, 1)
-    #cholfact!(At_mul_B!(p.chol.UL, p.Xp, p.Xp), :U)
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, rp))
     p
 end
@@ -154,7 +163,7 @@ function GLM.scale(m::LinearIVModel, sqr::Bool=false)
         s = sumsq(residuals(m))/df_residual(m)
     else
         s = sum(DispersionFun(), m.rr.wts, residuals(m))/df_residual(m)
-    end 
+    end
     sqr ? s : sqrt(s)
 end
 
