@@ -5,16 +5,18 @@ using NumericExtensions
 
 @reexport using GLM
 @reexport using StatsBase
+@reexport using CovarianceMatrices
 
 import GLM: BlasReal, Cholesky, FP, WtResid, Add, Subtract, Multiply, DispersionFun, ModelMatrix, result_type, delbeta!
 import StatsBase: residuals, coeftable
 import Distributions: ccdf, FDist, Chisq, Normal
+import CovarianceMatrices: CRHC
 
 typealias FPVector{T<:FloatingPoint} DenseArray{T,1}
 
 type IVResp{V<:FPVector} <: GLM.ModResp  # response in a linear model
     mu::V                                # mean response
-    offset::V                            # offset added to linear predictor (may have length 0)
+    offset::V                            # offset added to predictor 
     wts::V                               # prior weights (may have length 0)
     wrkresid::V                          # residual
     y::V                                 # response
@@ -148,13 +150,11 @@ function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T
     p
 end
 
-ivreg(X, Z, y; kwargs...) = fit(InstrumentalVariables.LinearIVModel, X, Z, y; kwargs...)
+ivreg(X, Z, y; kwargs...) = fit(LinearIVModel, X, Z, y; kwargs...)
 
 if VERSION >= v"0.4.0-dev+122"
-    #cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky{T,Matrix{T},:U}(p.qr[:R])
     Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; typeof(c)(copy(c.UL)))
 else
-    #cholfact{T<:FP}(p::DenseIVPredQR{T}) = Cholesky(p.qr[:R], 'U')
     Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
 end
 
@@ -167,9 +167,9 @@ function GLM.scale(m::LinearIVModel, sqr::Bool=false)
     sqr ? s : sqrt(s)
 end
 
-function coeftable(mm::LinearIVModel)
+function coeftable(mm::LinearIVModel, v = HC0())
     cc = coef(mm)
-    se = stderr(mm)
+    se = stderr(mm, v)
     tt = cc ./ se
     CoefTable(hcat(cc,se,tt,ccdf(Normal(0, 1), abs2(tt))),
               ["Estimate","Std.Error","t value", "Pr(>|t|)"],
@@ -185,9 +185,55 @@ function coeftable(mm::LinearIVModel, vv::RobustVariance)
               ["x$i" for i = 1:size(mm.pp.X, 2)], 4)
 end
 
-
-
 ModelMatrix(x::LinearIVModel) = x.pp.Xp
+
+function wrkresidwts(r::IVResp)
+    a = wrkwts(r)
+    u = copy(wrkresid(r))
+    length(r.wts) == 0 ? u : broadcast!(*, u, a)
+end
+
+CovarianceMatrices.wrkresid(r::IVResp) = r.wrkresid
+CovarianceMatrices.wrkwts(r::IVResp) = r.wts
+
+function meat(l::LinearIVModel,  k::RobustVariance)
+    u = copy(l.rr.wrkresid)
+    w = l.rr.wts
+    if length(w) > 0
+        u = u.*sqrt(w)
+    end
+    X = ModelMatrix(l)
+    z = X.*u
+    CovarianceMatrices.adjfactor!(u, l, k)
+    scale!(Base.LinAlg.At_mul_B(z, z.*u), 1/nobs(l))
+end
+
+function meat(x::LinearIVModel, v::CRHC)
+    idx = sortperm(v.cl)
+    cls = v.cl[idx]
+    ichol = inv(x.pp.chol)
+    X = ModelMatrix(x)[idx,:]
+    e = wrkresid(x.rr)[idx]
+    w = wrkwts(x.rr)[idx]
+    if length(w) > 0
+        e = e.*sqrt(w)
+    end
+    bstarts = [searchsorted(cls, j[2]) for j in enumerate(unique(cls))]
+    adjresid!(v, X, e, ichol, bstarts)
+    M = zeros(size(X, 2), size(X, 2))
+    clusterize!(M, X.*e, bstarts)
+    return scale!(M, 1/nobs(x))
+end 
+
+function hatmatrix(l::LinearIVModel)
+    z = copy(ModelMatrix(l))
+    cf = cholfact(l.pp)[:UL]
+    Base.LinAlg.A_rdiv_B!(z, cf)
+    diag(Base.LinAlg.A_mul_Bt(z, z))
+end
+
+
+
 
 export ivreg, residuals, coeftable
 

@@ -1,28 +1,114 @@
 using InstrumentalVariables
-using PDMats
 
 # write your own tests here
 #@test 1 == 1
 
-srand(7875)
-
-y = randn(100); x = randn(100,3); z = randn(100, 10);
-
-function ivreg(y, x, z)
-    zz = PDMat(z'z)
-    Pz = X_invA_Xt(zz, z)
-    xPz= x'*Pz
-    reshape(xPz*x\xPz*y, size(x)[2])
+function randiv(;n::Int64        = 100,
+                m::Int64         = 5,
+                k::Int64         = 1,
+                theta0::Float64  = 0.0,
+                rho::Float64     = 0.9,
+                CP::Int64        = 20)
+    randiv(n, m, k, theta0, rho, CP)
 end
 
-bas = ivreg(y, x, z);
+function randiv(n::Int64        = 100,
+                m::Int64         = 5,
+                k::Int64         = 1,
+                theta0::Float64  = 0.0,
+                rho::Float64     = 0.9,
+                CP::Int64        = 20)
+    tau     = fill(sqrt(CP/(m*n)), m)
+    z       = randn(n, m)
+    vi      = randn(n, 1)
+    eta     = randn(n, 1)
+    epsilon = rho*eta+sqrt(1-rho^2)*vi   
+    BLAS.gemm!('N', 'N', 1.0, z, tau, 1.0, eta)
+    BLAS.gemm!('N', 'N', 1.0, eta, [theta0], 1.0, epsilon)
+    return epsilon, eta, z
+end
 
-out = iv(x,z,y);
+srand(1)
+y, x, z = randiv(n = 500, k = 3, m = 15);
+cl = repmat([1:25], 20)
+ww = rand(500)
 
-vcov(out)
+iivv = ivreg(x,z,reshape(y, 500))
 
-using CovarianceMatrices
+mut = [0.18402423026700765,-0.18069781054811473,-0.10666434926774973,
+       0.1716025154131859,-0.0794834970843437,0.1728389042278303,
+       -0.19455903354864845,-0.04328538690391654,0.3573882542662863]
 
-vcov(out, HC0())
+mu = predict(iivv)
+@test maximum(mu[1:9] - mut)<1e-10
+
+ut = [0.06743220393049221,-0.33965003523101844,-0.2636323254480044,
+      0.41789439202294165,0.09369677251530516,1.357234945075299,
+      -1.1479591516308787,-0.34120715739919666,0.012435837904900104]
+
+u = residuals(iivv)
+@test maximum(u[1:9] - ut) < 1e-10
+
+
+betat = [0.26050875643847554]
+@test maximum(betat - coef(iivv)) < 1e-09
+
+@test_approx_eq stderr(iivv) [0.15188237754059922]
+@test_approx_eq stderr(iivv, HC1()) [0.16119631706495913]
+@test_approx_eq stderr(iivv, HC2()) [0.16159542810823724]
+@test_approx_eq stderr(iivv, HC3()) [0.16216172762549416]
+@test_approx_eq stderr(iivv, HC4()) [0.16295579476374497]
+@test_approx_eq stderr(iivv, HC4m()) [0.16242050216392523]
+@test_approx_eq stderr(iivv, HC5()) [0.16437294390550466]
+
+iivv = ivreg(x,z,reshape(y, 500), wts = ww)
+
+@test_approx_eq sqrt(vcov(iivv, HC1()))  [0.16634761896913675]
+@test_approx_eq sqrt(vcov(iivv, HC3()))  [0.16786988598366934]
+
+
+@test_approx_eq sqrt(vcov(iivv, CRHC0(cl)))  [0.17650498286330474]
+@test_approx_eq sqrt(vcov(iivv, CRHC1(cl)))  [0.18014464378074402]
+@test_approx_eq sqrt(vcov(iivv, CRHC2(cl)))  [0.18100382220522054]
+@test_approx_eq sqrt(vcov(iivv, CRHC3(cl)))  [0.18961072793672662]
+
+@test coeftable(iivv)
+@test coeftable(iivv, HC1())
+@test coeftable(iivv, CRHC1(cl))
+
+srand(1)
+y, x, z = randiv(n = 25000, k = 3, m = 15);
+add_x = randn(25000, 20)
+x = [x add_x]
+z = [z add_x]
+cl = repmat([1:50], 50)
+ww = rand(25000)
+
+println("Timing of ivreg")
+@time iivv = ivreg(x,z,reshape(y, 25000), wts = ww)
+
+
+
+
+## srand(7875)
+
+## y = randn(100); x = randn(100,3); z = randn(100, 10);
+
+## function ivreg(y, x, z)
+##     zz = PDMat(z'z)
+##     Pz = X_invA_Xt(zz, z)
+##     xPz= x'*Pz
+##     reshape(xPz*x\xPz*y, size(x)[2])
+## end
+
+## bas = ivreg(y, x, z);
+
+## out = iv(x,z,y);
+
+## vcov(out)
+
+## using CovarianceMatrices
+
+## vcov(out, HC0())
 
 
