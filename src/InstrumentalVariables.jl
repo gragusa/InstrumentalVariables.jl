@@ -1,7 +1,7 @@
 module InstrumentalVariables
 
 using Reexport
-using NumericExtensions
+#using NumericExtensions
 
 @reexport using GLM
 @reexport using StatsBase
