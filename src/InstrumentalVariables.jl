@@ -12,7 +12,7 @@ import StatsBase: residuals, coeftable
 import Distributions: ccdf, FDist, Chisq, Normal
 import CovarianceMatrices: CRHC
 
-typealias FPVector{T<:FloatingPoint} DenseArray{T,1}
+typealias FPVector{T<:AbstractFloat} DenseArray{T,1}
 
 type IVResp{V<:FPVector} <: GLM.ModResp  # response in a linear model
     mu::V                                # mean response
@@ -55,7 +55,7 @@ function updatemu!{V<:FPVector}(r::IVResp{V}, linPr::V)
 end
 updatemu!{V<:FPVector}(r::IVResp{V}, linPr) = updatemu!(r, convert(V,vec(linPr)))
 
-function StatsBase.fit{T<:FloatingPoint, V<:FPVector,
+function StatsBase.fit{T<:AbstractFloat, V<:FPVector,
                        LinPredT<:LinPred}(::Type{LinearIVModel{LinPredT}},
                                           X::Matrix{T}, Z::Matrix{T}, y::V;
                                           dofit::Bool=true,
@@ -90,7 +90,7 @@ function wrkresp(r::IVResp)
     map(Add(), r.y, r.wrkresid)
 end
 
-type DenseIVPredChol{T<:BlasReal} <: DensePred
+type DenseIVPredChol{T<:BlasReal} <: GLM.DensePred
     X::Matrix{T}                   # model matrix
     Z::Matrix{T}                   # instrument matrix
     beta0::Vector{T}               # base vector for coefficients
