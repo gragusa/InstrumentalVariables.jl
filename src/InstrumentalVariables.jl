@@ -3,20 +3,21 @@ module InstrumentalVariables
 using Reexport
 #using NumericExtensions
 
-@reexport using GLM
-@reexport using StatsBase
+using GLM
+using StatsBase
 @reexport using CovarianceMatrices
 
-import GLM: BlasReal, Cholesky, FP, WtResid, Add, Subtract, Multiply, DispersionFun, ModelMatrix, result_type, delbeta!
-import StatsBase: residuals, coeftable
+import GLM: Cholesky, FP, ModelMatrix, delbeta!, predict
+import StatsBase: residuals, coeftable, stderr, vcov
 import Distributions: ccdf, FDist, Chisq, Normal
-import CovarianceMatrices: CRHC
+import CovarianceMatrices: CRHC, adjresid!, clusterize!, wrkresidwts, RobustVariance, HC, meat
 
 typealias FPVector{T<:AbstractFloat} DenseArray{T,1}
+typealias BlasReal Union{Float32,Float64}
 
 type IVResp{V<:FPVector} <: GLM.ModResp  # response in a linear model
     mu::V                                # mean response
-    offset::V                            # offset added to predictor 
+    offset::V                            # offset added to predictor
     wts::V                               # prior weights (may have length 0)
     wrkresid::V                          # residual
     y::V                                 # response
@@ -44,10 +45,19 @@ type LinearIVModel{T<:LinPred} <: LinPredModel
 end
 
 deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts, r.y, r.mu)
+
 residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu :  (r.y-r.mu)
 
 residuals(r::IVResp) = r.wrkresid
 residuals(l::LinearIVModel) = residuals(l.rr)
+
+residuals(l::LinearIVModel, k::RobustVariance) = wrkresidwts(l.rr)
+
+function wrkresidwts(r::IVResp)
+    a = wrkwts(r)
+    u = copy(wrkresid(r))
+    length(a) == 0 ? u : broadcast!(*, u, u, sqrt(a))
+end
 
 function updatemu!{V<:FPVector}(r::IVResp{V}, linPr::V)
     n = length(linPr); length(r.y) == n || error("length(linPr) is $n, should be $(length(r.y))")
@@ -90,36 +100,28 @@ function wrkresp(r::IVResp)
     map(Add(), r.y, r.wrkresid)
 end
 
-type DenseIVPredChol{T<:BlasReal} <: GLM.DensePred
+type DenseIVPredChol{T <: AbstractFloat} <: GLM.DensePred
     X::Matrix{T}                   # model matrix
     Z::Matrix{T}                   # instrument matrix
     beta0::Vector{T}               # base vector for coefficients
     delbeta::Vector{T}
     Xp::Matrix{T}
     chol::Cholesky{T}
-    function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T},
-                                          beta0::Vector{T}, wt::Vector{T})
+    function DenseIVPredChol(X::Matrix{T}, Z::Matrix{T},
+                             beta0::Vector{T}, wt::Vector{T})
         n,p = size(X); length(beta0) == p || error("dimension mismatch")
         if length(wt) > 0
             src = similar(Z)
-            Zw = vbroadcast!(Multiply(), src, Z, sqrt(wt), 1)
+            Zw = broadcast!(*, src, Z, sqrt(wt))
             src = similar(X)
-            Xw = vbroadcast!(Multiply(), src, X, sqrt(wt), 1)
+            Xw = broadcast!(*, src, X, sqrt(wt))
             cholfac_Z = cholfact(Zw'Zw)
             a  = Xw'Zw
             b  = copy(Zw)
-            ## z  = Xw'Zw
-            ## Base.LinAlg.A_rdiv_B!(z, cholfac_Z[:UL])
-            ## XX = A_mul_Bt(z,z)
-            ## XX = Xw'Zw*inv(cholfac_Z)*Zw'Xw  ## No need to store this probably
-            ## Xt = Zw*inv(cholfac_Z)*Zw'Xw
-            ## Xt = A_mul_Bt(Zw, z)
         else
             cholfac_Z = cholfact(Z'Z)
             a  = X'Z
             b  = copy(Z)
-            ## XX = X'Z*inv(cholfac_Z)*Z'X  ## No need to store this probably
-            ## Xt = Z*inv(cholfac_Z)*Z'X
         end
         Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
         XX = A_mul_Bt(a,a)
@@ -129,22 +131,21 @@ type DenseIVPredChol{T<:BlasReal} <: GLM.DensePred
     end
 end
 
-function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T})
+function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T})
     DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)), similar(X, 0))
 end
 
-function DenseIVPredChol{T<:BlasReal}(X::Matrix{T}, Z::Matrix{T}, wt::Vector{T})
+function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T}, wt::Vector{T})
     scr = similar(Z)
-    vbroadcast!(Multiply(), scr, Z, sqrt(wt), 1)
     DenseIVPredChol{T}(X, Z, zeros(T, size(X,2)), wt)
 end
 
-function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T})
+function delbeta!{T<:AbstractFloat}(p::DenseIVPredChol{T}, r::Vector{T})
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, r))
     p
 end
 
-function delbeta!{T<:BlasReal}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T})
+function delbeta!{T<:AbstractFloat}(p::DenseIVPredChol{T}, r::Vector{T}, wt::Vector{T})
     rp = broadcast(*, r, sqrt(wt))
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, rp))
     p
@@ -152,18 +153,26 @@ end
 
 ivreg(X, Z, y; kwargs...) = fit(LinearIVModel, X, Z, y; kwargs...)
 
-if VERSION >= v"0.4.0-dev+122"
-    Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; typeof(c)(copy(c.UL)))
-else
-    Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(c.UL),c.uplo))
-end
+
+cholfactors(c::Cholesky) = c.factors
+Base.cholfact{T<:FP}(p::DenseIVPredChol{T}) = (c = p.chol; Cholesky(copy(cholfactors(c)), c.uplo))
+
+Base.LinAlg.cholfact!{T}(p::DenseIVPredChol{T}) = p.chol
 
 function GLM.scale(m::LinearIVModel, sqr::Bool=false)
-    if length(m.rr.wts) == 0
-        s = sumsq(residuals(m))/df_residual(m)
+    resid = residuals(m)
+    wts   = m.rr.wts
+    s = zero(eltype(resid))
+    if length(wts) == 0
+        @inbounds @simd for i = 1:length(resid)
+            s += abs2(resid[i])
+        end
     else
-        s = sum(DispersionFun(), m.rr.wts, residuals(m))/df_residual(m)
+        @inbounds @simd for i = 1:length(resid)
+            s += wts[i]*abs2(resid[i])
+        end
     end
+    s /= df_residual(m)
     sqr ? s : sqrt(s)
 end
 
@@ -187,54 +196,65 @@ end
 
 ModelMatrix(x::LinearIVModel) = x.pp.Xp
 
-function wrkresidwts(r::IVResp)
-    a = wrkwts(r)
-    u = copy(wrkresid(r))
-    length(r.wts) == 0 ? u : broadcast!(*, u, a)
-end
+#wrkresidwts(r::IVResp) = wrkresid(r)
 
-CovarianceMatrices.wrkresid(r::IVResp) = r.wrkresid
-CovarianceMatrices.wrkwts(r::IVResp) = r.wts
+CovarianceMatrices.wrkwts(r::IVResp) = (w = r.wts; length(w) == 0 ? ones(length(r.y)) : w)
 
-function meat(l::LinearIVModel,  k::RobustVariance)
-    u = copy(l.rr.wrkresid)
-    w = l.rr.wts
-    if length(w) > 0
-        u = u.*sqrt(w)
-    end
-    X = ModelMatrix(l)
-    z = X.*u
-    CovarianceMatrices.adjfactor!(u, l, k)
-    scale!(Base.LinAlg.At_mul_B(z, z.*u), 1/nobs(l))
-end
 
-function meat(x::LinearIVModel, v::CRHC)
+wrkwts(l::LinearIVModel) = l.rr.wts
+wrkwts(r::IVResp)        = r.wts
+
+wrkresid(l::LinearIVModel) = l.rr.wrkresid
+wrkresid(r::IVResp)        = r.wrkresid
+
+# function bread(l::LinearIVModel)
+#     inv(cholfact(l.pp))
+# end
+
+# function CovarianceMatrices.meat(l::LinearIVModel, k::RobustVariance)
+#     u = copy(residuals(l))
+#     w = l.rr.wts
+#     length(w) > 0 ? broadcast!(*, u, u, sqrt(w)) : u
+#     X = copy(ModelMatrix(l))
+#     broadcast!(*, X, X, u)
+#     CovarianceMatrices.adjfactor!(u, l, k)
+#     Base.LinAlg.At_mul_B(X, X.*u)
+# end
+
+function CovarianceMatrices.meat(x::LinearIVModel, v::CRHC)
     idx = sortperm(v.cl)
     cls = v.cl[idx]
     ichol = inv(x.pp.chol)
     X = ModelMatrix(x)[idx,:]
     e = wrkresid(x.rr)[idx]
-    w = wrkwts(x.rr)[idx]
+    w = wrkwts(x.rr)
     if length(w) > 0
-        e = e.*sqrt(w)
+        #e = e.*sqrt(w[idx])
+        broadcast!(*, e, e, sqrt(w[idx]))
     end
     bstarts = [searchsorted(cls, j[2]) for j in enumerate(unique(cls))]
     adjresid!(v, X, e, ichol, bstarts)
     M = zeros(size(X, 2), size(X, 2))
     clusterize!(M, X.*e, bstarts)
-    return scale!(M, 1/nobs(x))
-end 
-
-function hatmatrix(l::LinearIVModel)
-    z = copy(ModelMatrix(l))
-    cf = cholfact(l.pp)[:UL]
-    Base.LinAlg.A_rdiv_B!(z, cf)
-    diag(Base.LinAlg.A_mul_Bt(z, z))
+    scale!(M, 1/nobs(x))
 end
 
+# function hatmatrix(l::LinearIVModel)
+#     z = copy(ModelMatrix(l))
+#     cf = cholfact(l.pp)[:UL]
+#     Base.LinAlg.A_rdiv_B!(z, cf)
+#     diag(Base.LinAlg.A_mul_Bt(z, z))
+# end
+
+# function vcov(l::LinearIVModel, k::RobustVariance)
+#     B = meat(l, k)
+#     A = bread(l)
+#     A*B*A
+# end
+
+# stderr(l::LinearIVModel, k::RobustVariance) = sqrt(diag(InstrumentalVariables.vcov(l, k)))
 
 
-
-export ivreg, residuals, coeftable
+export ivreg, residuals, coeftable, stderr, vcov, predict, coef
 
 end # module

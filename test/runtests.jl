@@ -1,5 +1,7 @@
 using InstrumentalVariables
-
+using GLM
+using CovarianceMatrices
+using Base.Test
 # write your own tests here
 #@test 1 == 1
 
@@ -30,8 +32,7 @@ end
 
 srand(1)
 y, x, z = randiv(n = 500, k = 3, m = 15);
-cl = repmat([1:25], 20)
-ww = rand(500)
+cl = repmat(collect(1:25), 20)
 
 iivv = ivreg(x,z,reshape(y, 500))
 
@@ -61,10 +62,18 @@ betat = [0.26050875643847554]
 @test_approx_eq stderr(iivv, HC4m()) [0.16242050216392523]
 @test_approx_eq stderr(iivv, HC5()) [0.16437294390550466]
 
-iivv = ivreg(x,z,reshape(y, 500), wts = ww)
+data = readtable("../../InstrumentalVariables/test/iv_test.csv")
+
+y = convert(Array, data[:y])
+x = convert(Array, data[:x])
+x = reshape(x, length(x), 1)
+z = convert(Array, data[3:17])
+w = convert(Array, data[:weight])
+cl = round(Int, convert(Array, data[:cluster]))
+iivv = ivreg(x,z,reshape(y, 500), wts = w)
 
 @test_approx_eq sqrt(vcov(iivv, HC1()))  [0.16634761896913675]
-@test_approx_eq sqrt(vcov(iivv, HC3()))  [0.16786988598366934]
+@test_approx_eq sqrt(vcov(iivv, HC3()))  [0.16744380411206328]
 
 
 @test_approx_eq sqrt(vcov(iivv, CRHC0(cl)))  [0.17650498286330474]
@@ -72,20 +81,20 @@ iivv = ivreg(x,z,reshape(y, 500), wts = ww)
 @test_approx_eq sqrt(vcov(iivv, CRHC2(cl)))  [0.18100382220522054]
 @test_approx_eq sqrt(vcov(iivv, CRHC3(cl)))  [0.18961072793672662]
 
-@test coeftable(iivv)
-@test coeftable(iivv, HC1())
-@test coeftable(iivv, CRHC1(cl))
+coeftable(iivv)
+coeftable(iivv, HC1())
+coeftable(iivv, CRHC1(cl))
 
-srand(1)
-y, x, z = randiv(n = 25000, k = 3, m = 15);
-add_x = randn(25000, 20)
-x = [x add_x]
-z = [z add_x]
-cl = repmat([1:50], 50)
-ww = rand(25000)
+# srand(1)
+# y, x, z = randiv(n = 25000, k = 3, m = 15);
+# add_x = randn(25000, 20)
+# x = [x add_x]
+# z = [z add_x]
+# cl = repmat([1:50], 50)
+# ww = rand(25000)
 
-println("Timing of ivreg")
-@time iivv = ivreg(x,z,reshape(y, 25000), wts = ww)
+# println("Timing of ivreg")
+# @time iivv = ivreg(x,z,reshape(y, 25000), wts = ww)
 
 
 
@@ -102,13 +111,42 @@ println("Timing of ivreg")
 ## end
 
 ## bas = ivreg(y, x, z);
-
 ## out = iv(x,z,y);
-
 ## vcov(out)
-
 ## using CovarianceMatrices
-
 ## vcov(out, HC0())
 
+# data = readtable("../../InstrumentalVariables/test/iv_test.csv")
+
+# y = convert(Array, data[:y])
+# x = convert(Array, data[:x])
+# x = reshape(x, length(x), 1)
+# z = convert(Array, data[3:17])
+# w = convert(Array, data[:weight])
+# cl = convert(Array, data[:cluster])
+# iivv = ivreg(x,z,reshape(y, 500), wts = w)
+
+# xw = x.*sqrt(w)
+# zw = z.*sqrt(w)
+# yw = y.*sqrt(w)
+
+# a = inv((xw'zw)*inv(zw'zw)*(zw'xw))
+# b = (xw'zw)*inv(zw'zw)*(zw'yw)
+
+# bread_ = inv((xw'zw)*inv(zw'zw)*(zw'xw))
+# u = yw-xw*(a*b)
+# meat_  = (xw'zw)*inv(zw'zw)*(zw.*u)'
+# meat_  = meat_*meat_'
+# sqrt(bread_*(meat_)*bread_)
+
+
+
+
+
+# k = HC0()
+# u = yw-xw*(a*b)
+# X = copy(ModelMatrix(iivv))
+# Z = X.*u
+# CovarianceMatrices.adjfactor!(u, iivv, k)
+# Base.LinAlg.At_mul_B(Z, Z.*u)
 
