@@ -1,11 +1,9 @@
 module InstrumentalVariables
 
 using Reexport
-#using NumericExtensions
-
+@reexport using CovarianceMatrices
 using GLM
 using StatsBase
-@reexport using CovarianceMatrices
 
 import GLM: Cholesky, FP, ModelMatrix, delbeta!, predict
 import StatsBase: residuals, coeftable, stderr, vcov
@@ -44,13 +42,53 @@ type LinearIVModel{T<:LinPred} <: LinPredModel
     pp::T
 end
 
+type DenseIVPredChol{T <: AbstractFloat} <: GLM.DensePred
+    X::Matrix{T}                   # model matrix
+    Z::Matrix{T}                   # instrument matrix
+    beta0::Vector{T}               # base vector for coefficients
+    delbeta::Vector{T}
+    Xp::Matrix{T}
+    chol::Cholesky{T}
+    function DenseIVPredChol(X::Matrix{T}, Z::Matrix{T},
+                             beta0::Vector{T}, wt::Vector{T})
+        n,p = size(X); length(beta0) == p || error("dimension mismatch")
+        if length(wt) > 0
+            src = similar(Z)
+            Zw = broadcast!(*, src, Z, sqrt(wt))
+            src = similar(X)
+            Xw = broadcast!(*, src, X, sqrt(wt))
+            cholfac_Z = cholfact(Zw'Zw)
+            a  = Xw'Zw
+            b  = copy(Zw)
+        else
+            cholfac_Z = cholfact(Z'Z)
+            a  = X'Z
+            b  = copy(Z)
+        end
+        Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
+        XX = A_mul_Bt(a,a)
+        Base.LinAlg.A_rdiv_B!(b, cholfac_Z[:UL])
+        Xt = A_mul_Bt(b, a)
+        new(X, Z, beta0, beta0, Xt, cholfact(XX))
+    end
+end
+
+function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T})
+    DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)), similar(X, 0))
+end
+
+function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T}, wt::Vector{T})
+    scr = similar(Z)
+    DenseIVPredChol{T}(X, Z, zeros(T, size(X,2)), wt)
+end
+
+
+
 deviance(r::IVResp) = length(r.wts) == 0 ? sumsqdiff(r.y, r.mu) : wsumsqdiff(r.wts, r.y, r.mu)
 
 residuals!(r::IVResp) = r.wrkresid = length(r.wts) == 0 ? r.y - r.mu :  (r.y-r.mu)
-
 residuals(r::IVResp) = r.wrkresid
 residuals(l::LinearIVModel) = residuals(l.rr)
-
 residuals(l::LinearIVModel, k::RobustVariance) = wrkresidwts(l.rr)
 
 function wrkresidwts(r::IVResp)
@@ -100,45 +138,6 @@ function wrkresp(r::IVResp)
     map(Add(), r.y, r.wrkresid)
 end
 
-type DenseIVPredChol{T <: AbstractFloat} <: GLM.DensePred
-    X::Matrix{T}                   # model matrix
-    Z::Matrix{T}                   # instrument matrix
-    beta0::Vector{T}               # base vector for coefficients
-    delbeta::Vector{T}
-    Xp::Matrix{T}
-    chol::Cholesky{T}
-    function DenseIVPredChol(X::Matrix{T}, Z::Matrix{T},
-                             beta0::Vector{T}, wt::Vector{T})
-        n,p = size(X); length(beta0) == p || error("dimension mismatch")
-        if length(wt) > 0
-            src = similar(Z)
-            Zw = broadcast!(*, src, Z, sqrt(wt))
-            src = similar(X)
-            Xw = broadcast!(*, src, X, sqrt(wt))
-            cholfac_Z = cholfact(Zw'Zw)
-            a  = Xw'Zw
-            b  = copy(Zw)
-        else
-            cholfac_Z = cholfact(Z'Z)
-            a  = X'Z
-            b  = copy(Z)
-        end
-        Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
-        XX = A_mul_Bt(a,a)
-        Base.LinAlg.A_rdiv_B!(b, cholfac_Z[:UL])
-        Xt = A_mul_Bt(b, a)
-        new(X, Z, beta0, beta0, Xt, cholfact(XX))
-    end
-end
-
-function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T})
-    DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)), similar(X, 0))
-end
-
-function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T}, wt::Vector{T})
-    scr = similar(Z)
-    DenseIVPredChol{T}(X, Z, zeros(T, size(X,2)), wt)
-end
 
 function delbeta!{T<:AbstractFloat}(p::DenseIVPredChol{T}, r::Vector{T})
     A_ldiv_B!(p.chol, At_mul_B!(p.delbeta, p.Xp, r))
