@@ -65,4 +65,4 @@ iv = ivreg(x, z, y)
 
 [ ] Improve API
 [ ] Add first stage information
-[ ] Add test statistics
+[ ] Add test statistics for validity of instruments
