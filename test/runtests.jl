@@ -24,7 +24,7 @@ function randiv(n::Int64        = 100,
     z       = randn(n, m)
     vi      = randn(n, 1)
     eta     = randn(n, 1)
-    epsilon = rho*eta+sqrt(1-rho^2)*vi   
+    epsilon = rho*eta+sqrt(1-rho^2)*vi
     BLAS.gemm!('N', 'N', 1.0, z, tau, 1.0, eta)
     BLAS.gemm!('N', 'N', 1.0, eta, [theta0], 1.0, epsilon)
     return epsilon, eta, z
@@ -149,4 +149,3 @@ coeftable(iivv, CRHC1(cl))
 # Z = X.*u
 # CovarianceMatrices.adjfactor!(u, iivv, k)
 # Base.LinAlg.At_mul_B(Z, Z.*u)
-
