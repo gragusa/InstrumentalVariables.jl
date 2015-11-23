@@ -2,23 +2,20 @@
 
 [![Build Status](https://travis-ci.org/gragusa/InstrumentalVariables.jl.svg?branch=master)](https://travis-ci.org/gragusa/InstrumentalVariables.jl)
 
-[![Coverage Status](https://coveralls.io/repos/gragusa/IntrumentalVariables.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/gragusa/IntrumentalVariables.jl?branch=master)
-[![codecov.io](http://codecov.io/github/gragusa/IntrumentalVariables.jl/coverage.svg?branch=master)](http://codecov.io/github/gragusa/IntrumentalVariables.jl?branch=master)
-
-
+[![Coverage Status](https://coveralls.io/repos/gragusa/InstrumentalVariables.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/gragusa/InstrumentalVariables.jl?branch=master) [![codecov.io](https://codecov.io/github/gragusa/InstrumentalVariables.jl/coverage.svg?branch=master)](https://codecov.io/github/gragusa/InstrumentalVariables.jl?branch=master)
 
 `InstrumentalVariables` is a Julia package for instrumental variables estimation.
 
 At the moment the API is pretty limited, but all typical functionality are covered. In particular, the package is interfaced to `CovarianceMatrices` so that inference can be based on robust (to heteroskedasticity and/or autocorrelation) variance covariance estimators.
 
-# Install
+## Install
 
 At the moment the package is not registered, so it can be installed by cloning the github's repository:
 ```
 Pkg.clone("https://github.com/gragusa/InstrumentalVariables.jl.git")
 ```
 
-# Quick usage guide
+## Quick usage guide
 
 A IV model can be estimated by
 
@@ -40,7 +37,7 @@ gives the variance based on HC1 type heteroskedasticity robust variance matrices
 
 Other heteroskedastic robust variances are `HC2`, `HC3`, `HC4`, `HC4m`, `HC5`.
 
-# Example
+## Example
 
 We consider estimating the tax elasticity of alcohol demand.
 
@@ -64,8 +61,10 @@ The model can be estimated by
 iv = ivreg(x, z, y)
 ```
 
-# To do
+## To do
 
-[ ] Improve API
-[ ] Add first stage information
-[ ] Add test statistics for validity of instruments
+- [ ] Improve API
+- [ ] Add formula interface
+- [ ] Add first stage information
+- [ ] Add test statistics for validity of instruments
+- [ ] Add support for sparse IV
