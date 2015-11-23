@@ -2,6 +2,8 @@
 
 [![Build Status](https://travis-ci.org/gragusa/InstrumentalVariables.jl.svg?branch=master)](https://travis-ci.org/gragusa/InstrumentalVariables.jl)
 
+
+
 `InstrumentalVariables` is a Julia package for instrumental variables estimation.
 
 At the moment the API is pretty limited, but all typical functionality are covered. In particular, the package is interfaced to `CovarianceMatrices` so that inference can be based on robust (to heteroskedasticity and/or autocorrelation) variance covariance estimators.
@@ -58,3 +60,9 @@ The model can be estimated by
 ```
 iv = ivreg(x, z, y)
 ```
+
+# To do
+
+[ ] Improve API
+[ ] Add first stage information
+[ ] Add test statistics
