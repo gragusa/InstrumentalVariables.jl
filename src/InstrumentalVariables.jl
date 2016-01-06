@@ -19,67 +19,68 @@ type IVResp{V<:FPVector} <: GLM.ModResp  # response in a linear model
     wts::V                               # prior weights (may have length 0)
     wrkresid::V                          # residual
     y::V                                 # response
-    function IVResp(mu::V, off::V, wts::V, wrkresid::V, y::V)
+    function IVResp(y::V, mu::V, off::V, wts::V)
         n = length(y); length(mu) == n || error("mismatched lengths of mu and y")
         ll = length(off); ll == 0 || ll == n || error("length of offset is $ll, must be $n or 0")
         ll = length(wts); ll == 0 || ll == n || error("length of wts is $ll, must be $n or 0")
-        new(mu, off, wts, wrkresid, y)
+        new(mu, off, wts, similar(y), y)
     end
 end
 
-function IVResp{V<:FPVector}(y::V)
-    IVResp{V}(fill!(similar(y), zero(eltype(V))), similar(y, 0),
-              similar(y, 0), similar(y, 0), y)
-end
-
-function IVResp{V<:FPVector}(y::V, off::V, wts::V)
-    IVResp{V}(fill!(similar(y), zero(eltype(V))), off, wts,
-              similar(y, 0), y)
-end
+# function IVResp{V<:FPVector}(y::V)
+#     IVResp(fill!(similar(y), zero(eltype(V))), similar(y, 0),
+#               similar(y, 0), similar(y, 0), y)
+# end
+#
+# function IVResp{V<:FPVector}(y::V, off::V, wts::V)
+#     IVResp(fill!(similar(y), zero(eltype(V))), off, wts,
+#               similar(y, 0), y)
+# end
 
 type LinearIVModel{T<:LinPred} <: LinPredModel
     rr::IVResp
     pp::T
 end
 
-type DenseIVPredChol{T <: AbstractFloat} <: GLM.DensePred
+type DenseIVPredChol{T <: AbstractFloat, C} <: GLM.DensePred
     X::Matrix{T}                   # model matrix
     Z::Matrix{T}                   # instrument matrix
     beta0::Vector{T}               # base vector for coefficients
     delbeta::Vector{T}
     Xp::Matrix{T}
-    chol::Cholesky{T}
-    function DenseIVPredChol(X::Matrix{T}, Z::Matrix{T},
-                             beta0::Vector{T}, wt::Vector{T})
-        n,p = size(X); length(beta0) == p || error("dimension mismatch")
-        if length(wt) > 0
-            src = similar(Z)
-            Zw = broadcast!(*, src, Z, sqrt(wt))
-            src = similar(X)
-            Xw = broadcast!(*, src, X, sqrt(wt))
-            cholfac_Z = cholfact(Zw'Zw)
-            a  = Xw'Zw
-            b  = copy(Zw)
-        else
-            cholfac_Z = cholfact(Z'Z)
-            a  = X'Z
-            b  = copy(Z)
-        end
-        Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
-        XX = A_mul_Bt(a,a)
-        Base.LinAlg.A_rdiv_B!(b, cholfac_Z[:UL])
-        Xt = A_mul_Bt(b, a)
-        new(X, Z, beta0, beta0, Xt, cholfact(XX))
+    chol::C
+end
+
+function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T},
+                         beta0::Vector{T}, wt::Vector{T})
+    n,p = size(X); length(beta0) == p || error("dimension mismatch")
+    if length(wt) > 0
+        src = similar(Z)
+        Zw = broadcast!(*, src, Z, sqrt(wt))
+        src = similar(X)
+        Xw = broadcast!(*, src, X, sqrt(wt))
+        cholfac_Z = cholfact(Zw'Zw)
+        a  = Xw'Zw
+        b  = copy(Zw)
+    else
+        cholfac_Z = cholfact(Z'Z)
+        a  = X'Z
+        b  = copy(Z)
     end
+    Base.LinAlg.A_rdiv_B!(a, cholfac_Z[:UL])
+    XX = A_mul_Bt(a,a)
+    Base.LinAlg.A_rdiv_B!(b, cholfac_Z[:UL])
+    Xt = A_mul_Bt(b, a)
+    DenseIVPredChol(X, Z, beta0, beta0, Xt, cholfact(XX))
 end
 
 function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T})
-    DenseIVPredChol{T}(X, Z, zeros(T,size(X,2)), similar(X, 0))
+    DenseIVPredChol(X, Z, zeros(T,size(X,2)), similar(X, 0))
 end
 
 function DenseIVPredChol{T<:AbstractFloat}(X::Matrix{T}, Z::Matrix{T}, wt::Vector{T})
     scr = similar(Z)
-    DenseIVPredChol{T}(X, Z, zeros(T, size(X,2)), wt)
+    DenseIVPredChol(X, Z, zeros(T, size(X,2)), wt)
 end
 
 
@@ -99,7 +100,7 @@ end
 
 function updatemu!{V<:FPVector}(r::IVResp{V}, linPr::V)
     n = length(linPr); length(r.y) == n || error("length(linPr) is $n, should be $(length(r.y))")
-    length(r.offset) == 0 ? copy!(r.mu, linPr) : map!(Add(), r.mu, linPr, r.offset)
+    length(r.offset) == 0 ? copy!(r.mu, linPr) : broadcast!(+, r.mu, linPr, offset)
 end
 updatemu!{V<:FPVector}(r::IVResp{V}, linPr) = updatemu!(r, convert(V,vec(linPr)))
 
@@ -113,8 +114,8 @@ function StatsBase.fit{T<:AbstractFloat, V<:FPVector,
     size(X, 1) == size(Z, 1) || DimensionMismatch("number of rows in X and Z must match")
     size(X, 2) < size(Z, 1)  || DimensionMismatch("number of instruments is not sufficient for identification")
     n = length(y)
-    wts = T <: Float64 ? copy(wts) : convert(typeof(y), wts)
-    rr = IVResp(y, offset, wts)
+    wts = T <: typeof(y) ? copy(wts) : convert(typeof(y), wts)
+    rr = IVResp{typeof(y)}(y, similar(y), offset, wts)
     if length(wts) > 0
         pp = LinPredT(X, Z, wts)
         updatemu!(rr, linpred(delbeta!(pp, rr.y, rr.wts), 0.))
@@ -238,6 +239,7 @@ function CovarianceMatrices.meat(x::LinearIVModel, v::CRHC)
     scale!(M, 1/nobs(x))
 end
 
+
 # function hatmatrix(l::LinearIVModel)
 #     z = copy(ModelMatrix(l))
 #     cf = cholfact(l.pp)[:UL]
@@ -253,6 +255,7 @@ end
 
 # stderr(l::LinearIVModel, k::RobustVariance) = sqrt(diag(InstrumentalVariables.vcov(l, k)))
 
+GLM.nobs(obj::LinearIVModel) = length(obj.rr.y)::Int64
 
 export ivreg, residuals, coeftable, stderr, vcov, predict, coef
 
