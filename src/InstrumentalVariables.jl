@@ -176,9 +176,9 @@ function GLM.scale(m::LinearIVModel, sqr::Bool=false)
     sqr ? s : sqrt(s)
 end
 
-function coeftable(mm::LinearIVModel, v = HC0())
+function coeftable(mm::LinearIVModel)
     cc = coef(mm)
-    se = stderr(mm, v)
+    se = stderr(mm)
     tt = cc ./ se
     CoefTable(hcat(cc,se,tt,ccdf(Normal(0, 1), abs2(tt))),
               ["Estimate","Std.Error","t value", "Pr(>|t|)"],
@@ -227,7 +227,7 @@ function CovarianceMatrices.meat(x::LinearIVModel, v::CRHC)
     ichol = inv(x.pp.chol)
     X = ModelMatrix(x)[idx,:]
     e = wrkresid(x.rr)[idx]
-    w = wrkwts(x.rr)
+    w =  wrkwts(x.rr)
     if length(w) > 0
         #e = e.*sqrt(w[idx])
         broadcast!(*, e, e, sqrt(w[idx]))
@@ -240,20 +240,19 @@ function CovarianceMatrices.meat(x::LinearIVModel, v::CRHC)
 end
 
 
-# function hatmatrix(l::LinearIVModel)
-#     z = copy(ModelMatrix(l))
-#     cf = cholfact(l.pp)[:UL]
-#     Base.LinAlg.A_rdiv_B!(z, cf)
-#     diag(Base.LinAlg.A_mul_Bt(z, z))
-# end
+function vcov(l::LinearIVModel)
+    e = residuals(l)
+    w = wrkwts(l)
+    if length(w) > 0
+        broadcast!(*, e, e, sqrt(w))
+    end
+    sigma = sumabs2(e)
+    B = l.pp.chol
+    sigma*inv(B)/df_residual(l)
+end
 
-# function vcov(l::LinearIVModel, k::RobustVariance)
-#     B = meat(l, k)
-#     A = bread(l)
-#     A*B*A
-# end
+stderr(l::LinearIVModel) = sqrt(diag(vcov(l)))
 
-# stderr(l::LinearIVModel, k::RobustVariance) = sqrt(diag(InstrumentalVariables.vcov(l, k)))
 
 GLM.nobs(obj::LinearIVModel) = length(obj.rr.y)::Int64
 
