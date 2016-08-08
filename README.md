@@ -61,6 +61,33 @@ The model can be estimated by
 iv = ivreg(x, z, y)
 ```
 
+By default, the `show` method of `LinearIvModel` will print a
+`coeftable` with standard errors obtained by assuming conditional
+heteroskedasticity. That is, the output of 
+
+```
+iv = ivreg(x, z, y)
+```
+is equivalent to the output of 
+```
+coeftable(iv)
+```
+
+If robust standard errors are sought, an interface with the
+`CovarianceMatrices` package allows to obtain them easily. For instance,
+the `HC1` type standard errors (these are the one calculated by default
+in STATA) are obtained by
+
+```
+coeftable(HC1())
+```
+
+If one only needs the variances (or the standard errors) 
+```
+vcov(iv, HC1())
+stderr(iv, HC1())
+```
+
 ## To do
 
 - [ ] Improve API
