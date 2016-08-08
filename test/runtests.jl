@@ -76,7 +76,7 @@ iivv = ivreg(x,z,reshape(y, 500), wts = w)
 
 @test_approx_eq sqrt(vcov(iivv, CRHC0(cl)))  [0.17650498286330474]
 @test_approx_eq sqrt(vcov(iivv, CRHC1(cl)))  [0.18014464378074402]
-@test_approx_eq sqrt(vcov(iivv, CRHC2(cl)))  [0.18100382220522054]
+@test_approx_eq sqrt(vcov(iivv, CRHC2(cl)))  [0.18577981328106555]
 @test_approx_eq sqrt(vcov(iivv, CRHC3(cl)))  [0.18961072793672662]
 
 coeftable(iivv)
